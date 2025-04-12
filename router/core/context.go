@@ -560,7 +560,7 @@ type OperationContext interface {
 	Type() string
 	// Hash is the hash of the operation
 	Hash() uint64
-	// Content is the content of the operation
+	// Content is the normalized content of the operation
 	Content() string
 	// Variables is the variables of the operation
 	Variables() *astjson.Value
@@ -585,6 +585,9 @@ type OperationContext interface {
 	// Cost returns cost results for the operation.
 	// This should be called after planning is complete; using in Middleware is recommended.
 	Cost() (OperationCost, error)
+
+	// RawContent returns the raw content associated with the operation
+	RawContent() string
 }
 
 var _ OperationContext = (*operationContext)(nil)
@@ -838,6 +841,19 @@ func (o *operationContext) Cost() (OperationCost, error) {
 		return OperationCost{}, errors.New("cost control is not enabled or not yet computed")
 	}
 	return OperationCost{Estimated: o.costEstimated}, nil
+}
+
+func (o *operationContext) RawContent() string {
+	return o.rawContent
+}
+
+// isMutationRequest returns true if the current request is a mutation request
+func isMutationRequest(ctx context.Context) bool {
+	op := getRequestContext(ctx)
+	if op == nil {
+		return false
+	}
+	return op.Operation().Type() == "mutation"
 }
 
 type SubgraphResolver struct {
