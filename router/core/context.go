@@ -474,7 +474,7 @@ type OperationContext interface {
 	Type() string
 	// Hash is the hash of the operation
 	Hash() uint64
-	// Content is the content of the operation
+	// Content is the normalized content of the operation
 	Content() string
 	// ClientInfo returns information about the client that initiated this operation
 	ClientInfo() ClientInfo
@@ -482,6 +482,10 @@ type OperationContext interface {
 	// if called too early in request chain, it may be inaccurate for modules, using
 	// in Middleware is recommended
 	QueryPlanStats() (QueryPlanStats, error)
+	// Variables returns the variables associated with the operation
+	Variables() *astjson.Value
+	// RawContent returns the raw content associated with the operation
+	RawContent() string
 }
 
 var _ OperationContext = (*operationContext)(nil)
@@ -636,6 +640,10 @@ func (o *operationContext) QueryPlanStats() (QueryPlanStats, error) {
 	}
 
 	return qps, nil
+}
+
+func (o *operationContext) RawContent() string {
+	return o.rawContent
 }
 
 // isMutationRequest returns true if the current request is a mutation request
