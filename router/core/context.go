@@ -468,7 +468,7 @@ type OperationContext interface {
 	Type() string
 	// Hash is the hash of the operation
 	Hash() uint64
-	// Content is the content of the operation
+	// Content is the normalized content of the operation
 	Content() string
 	// Variables is the variables of the operation
 	Variables() *astjson.Value
@@ -478,6 +478,8 @@ type OperationContext interface {
 	// if called too early in request chain, it may be inaccurate for modules, using
 	// in Middleware is recommended
 	QueryPlanStats() (QueryPlanStats, error)
+	// RawContent returns the raw content associated with the operation
+	RawContent() string
 }
 
 var _ OperationContext = (*operationContext)(nil)
@@ -632,6 +634,10 @@ func (o *operationContext) QueryPlanStats() (QueryPlanStats, error) {
 	}
 
 	return qps, nil
+}
+
+func (o *operationContext) RawContent() string {
+	return o.rawContent
 }
 
 type SubgraphResolver struct {
