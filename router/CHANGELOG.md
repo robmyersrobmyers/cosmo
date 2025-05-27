@@ -4,6 +4,28 @@ Binaries are attached to the github release otherwise all images can be found [h
 All notable changes to this project will be documented in this file.
 See [Conventional Commits](https://conventionalcommits.org) for commit guidelines.
 
+## [0.215.1](https://github.com/wundergraph/cosmo/compare/router@0.215.0...router@0.215.1) (2025-05-26)
+
+### Bug Fixes
+
+*  detach fetches from objects, serial mutations execution, remove fetch id from operation name ([#1877](https://github.com/wundergraph/cosmo/issues/1877)) ([7dd7caa](https://github.com/wundergraph/cosmo/commit/7dd7caa78b65859ef4dd0b3a94d019c0a8c572ae)) (@devsergiy)
+
+# [0.215.0](https://github.com/wundergraph/cosmo/compare/router@0.214.2...router@0.215.0) (2025-05-26)
+
+### Bug Fixes
+
+* **mcp:** rollback mcp library upgrade due to protocol support ([#1900](https://github.com/wundergraph/cosmo/issues/1900)) ([20c0959](https://github.com/wundergraph/cosmo/commit/20c09593f76b4586a919332a12adb83fbe6b9ab4)) (@StarpTech)
+
+### Features
+
+* add posthog to router ([#1882](https://github.com/wundergraph/cosmo/issues/1882)) ([27b4451](https://github.com/wundergraph/cosmo/commit/27b44514b2e13b815d0dd581fcd7edd65a0e8db0)) (@jensneuse)
+
+## [0.214.2](https://github.com/wundergraph/cosmo/compare/router@0.214.1...router@0.214.2) (2025-05-26)
+
+### Bug Fixes
+
+* **mcp:** enable PING events by default to prevent proxy timeouts ([#1897](https://github.com/wundergraph/cosmo/issues/1897)) ([5b1a1b2](https://github.com/wundergraph/cosmo/commit/5b1a1b27a31bbf03c4b34f3dd2bcb5c6846a26d2)) (@StarpTech)
+
 ## [0.214.1](https://github.com/wundergraph/cosmo/compare/router@0.214.0...router@0.214.1) (2025-05-23)
 
 ### Bug Fixes
