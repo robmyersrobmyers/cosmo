@@ -185,6 +185,10 @@ func (p *hogLog) Errorf(format string, args ...interface{}) {
 	p.log.Error(fmt.Sprintf(format, args...))
 }
 
+func (p *hogLog) Debugf(format string, args ...interface{}) {
+	p.log.Debug(fmt.Sprintf(format, args...))
+}
+
 func (u *UsageTracker) posthogLogger() posthog.Logger {
 	return &hogLog{
 		log: u.log.With(zap.String("component", "posthog_client")),
