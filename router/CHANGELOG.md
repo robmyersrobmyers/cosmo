@@ -4,6 +4,18 @@ Binaries are attached to the github release otherwise all images can be found [h
 All notable changes to this project will be documented in this file.
 See [Conventional Commits](https://conventionalcommits.org) for commit guidelines.
 
+# [0.243.0](https://github.com/wundergraph/cosmo/compare/router@0.242.0...router@0.243.0) (2025-08-13)
+
+### Features
+
+* always rewrite abstract fragments for gRPC ([#2133](https://github.com/wundergraph/cosmo/issues/2133)) ([65f53d4](https://github.com/wundergraph/cosmo/commit/65f53d439a46e11437f045f735f90a7535a9719f)) (@ysmolski)
+
+# [0.242.0](https://github.com/wundergraph/cosmo/compare/router@0.241.0...router@0.242.0) (2025-08-12)
+
+### Features
+
+* add support for plugins ([#2079](https://github.com/wundergraph/cosmo/issues/2079)) ([05c923a](https://github.com/wundergraph/cosmo/commit/05c923aaa09a898a1662fc40d0e5751dfa5b8fe1)) (@JivusAyrus)
+
 # [0.241.0](https://github.com/wundergraph/cosmo/compare/router@0.240.3...router@0.241.0) (2025-08-08)
 
 ### Features
