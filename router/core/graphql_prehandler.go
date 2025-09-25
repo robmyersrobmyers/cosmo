@@ -472,8 +472,8 @@ func (h *PreHandler) Handler(next http.Handler) http.Handler {
 }
 
 func (h *PreHandler) shouldComputeOperationSha256(operationKit *OperationKit) bool {
-	// If forced, always compute the hash
-	if h.computeOperationSha256 {
+	// If forced, compute the hash if one does not already exist
+	if h.computeOperationSha256 && !operationKit.parsedOperation.GraphQLRequestExtensions.PersistedQuery.HasHash() {
 		return true
 	}
 
