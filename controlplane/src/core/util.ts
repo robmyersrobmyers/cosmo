@@ -1,7 +1,8 @@
 import { randomFill } from 'node:crypto';
 import { isIPv4, isIPv6 } from 'node:net';
 import { S3ClientConfig } from '@aws-sdk/client-s3';
-import { HandlerContext } from '@connectrpc/connect';
+import { Code, ConnectError, HandlerContext } from '@connectrpc/connect';
+import * as Sentry from '@sentry/node';
 import {
   GraphQLSubscriptionProtocol,
   GraphQLWebsocketSubprotocol,
@@ -19,7 +20,12 @@ import { ProposalOrigin, SubgraphType } from '@wundergraph/cosmo-connect/dist/pl
 import { MemberRole, ProposalOrigin as ProposalOriginEnum, WebsocketSubprotocol } from '../db/models.js';
 import { AuthContext, DateRange, FederatedGraphDTO, Label, ResponseMessage, S3StorageOptions } from '../types/index.js';
 import { paginationDefaults } from './constants.js';
-import { isAuthenticationError, isAuthorizationError, isPublicError } from './errors/errors.js';
+import {
+  isAuthenticationError,
+  isAuthorizationError,
+  isClickHouseUnavailableError,
+  isPublicError,
+} from './errors/errors.js';
 import { GraphKeyAuthContext } from './services/GraphApiTokenAuthenticator.js';
 
 const labelRegex = /^[\dA-Za-z](?:[\w.-]{0,61}[\dA-Za-z])?$/;
@@ -65,6 +71,9 @@ export async function handleError<T extends ResponseMessage>(
           details: error.message,
         },
       } as T;
+    } else if (isClickHouseUnavailableError(error)) {
+      logger.error(error);
+      throw new ConnectError(error.message, Code.Unavailable);
     }
 
     logger.error(error);
@@ -74,6 +83,7 @@ export async function handleError<T extends ResponseMessage>(
 }
 
 export const fastifyLoggerId = Symbol('logger');
+export const sentrySpanId = Symbol('sentrySpan');
 
 export const getLogger = (ctx: HandlerContext, defaultLogger: FastifyBaseLogger) => {
   return ctx.values.get<FastifyBaseLogger>({ id: fastifyLoggerId, defaultValue: defaultLogger });
@@ -94,6 +104,25 @@ export const enrichLogger = (
   });
 
   ctx.values.set<FastifyBaseLogger>({ id: fastifyLoggerId, defaultValue: newLogger }, newLogger);
+
+  Sentry.setUser({
+    id: authContext.userId,
+    username: authContext.userDisplayName,
+  });
+
+  const spanAttributes = Object.fromEntries(
+    Object.entries({
+      'user.id': authContext.userId,
+      'user.displayName': authContext.userDisplayName,
+      'organization.id': authContext.organizationId,
+      'organization.slug': authContext.organizationSlug,
+    }).filter(([, v]) => v),
+  );
+
+  const activeSpan = Sentry.getActiveSpan();
+  if (activeSpan) {
+    Sentry.getRootSpan(activeSpan).setAttributes(spanAttributes);
+  }
 
   return newLogger;
 };
