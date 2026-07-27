@@ -172,6 +172,7 @@
                 "pages": [
                   "router/persisted-queries",
                   "router/persisted-queries/persisted-operations",
+                  "router/persisted-queries/exporting-subgraph-persisted-operations",
                   "router/persisted-queries/automatic-persisted-queries-apq"
                 ]
               },

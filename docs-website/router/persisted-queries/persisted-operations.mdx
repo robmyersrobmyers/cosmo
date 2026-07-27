@@ -160,6 +160,8 @@ persisted_operations:
 
 You can load persisted operations from your own S3-compatible storage instead of the Cosmo CDN. First, [define a storage provider](/router/storage-providers), then reference it in your persisted operations configuration.
 
+A filesystem storage provider works the same way, with no S3 or CDN access required. This is the only option when a subgraph is itself a router that needs to enforce [`block_non_persisted_operations`](#disallowing-non-persisted-operations) against the subquery documents a gateway sends it, rather than against client operations. See [Exporting Subgraph Persisted Operations](/router/persisted-queries/exporting-subgraph-persisted-operations) for how to generate those files.
+
 ## Disallowing non-persisted Operations
 
 If you're going all in on Security, you'd want to only allow Persisted Operations in your Production Environment.

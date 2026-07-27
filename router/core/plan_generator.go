@@ -27,6 +27,7 @@ import (
 	"github.com/wundergraph/graphql-go-tools/v2/pkg/engine/datasource/introspection_datasource"
 	"github.com/wundergraph/graphql-go-tools/v2/pkg/engine/plan"
 	"github.com/wundergraph/graphql-go-tools/v2/pkg/engine/postprocess"
+	"github.com/wundergraph/graphql-go-tools/v2/pkg/engine/resolve"
 	"github.com/wundergraph/graphql-go-tools/v2/pkg/operationreport"
 )
 
@@ -249,6 +250,75 @@ func (p *PlanWrapper) PrettyPrint() string {
 	}
 
 	return ""
+}
+
+// SubgraphOperation is a single GraphQL document a plan sends to a subgraph,
+// paired with the subgraph's identity.
+type SubgraphOperation struct {
+	SubgraphName string
+	SubgraphID   string
+	Query        string
+}
+
+// SubgraphOperations extracts the distinct (subgraph, document) pairs this plan
+// sends to subgraphs. The document text comes from the plan's query-plan metadata
+// (populated because planning always runs with plan.IncludeQueryPlanInResponse()),
+// which is derived purely from the planned AST: it is stable for a given
+// (schema, operation) pair regardless of the runtime variable values a request
+// eventually carries. A single operation can produce more than one fetch to the
+// same subgraph; identical (subgraph, document) pairs are deduplicated.
+func (p *PlanWrapper) SubgraphOperations() []SubgraphOperation {
+	var roots []*resolve.FetchTreeQueryPlanNode
+
+	switch pl := p.Plan.(type) {
+	case *plan.SynchronousResponsePlan:
+		roots = append(roots, pl.Response.Fetches.QueryPlan())
+	case *plan.SubscriptionResponsePlan:
+		roots = append(roots, pl.Response.Response.Fetches.QueryPlan())
+	case *plan.DeferResponsePlan:
+		roots = append(roots, pl.Response.Response.Fetches.QueryPlan())
+		for _, d := range pl.Response.Defers {
+			roots = append(roots, d.Fetches.QueryPlan())
+		}
+	}
+
+	seen := make(map[string]struct{})
+	var ops []SubgraphOperation
+
+	var addFetch func(f *resolve.FetchTreeQueryPlan)
+	addFetch = func(f *resolve.FetchTreeQueryPlan) {
+		if f == nil || f.Query == "" {
+			return
+		}
+		key := f.SubgraphName + "\x00" + f.Query
+		if _, ok := seen[key]; ok {
+			return
+		}
+		seen[key] = struct{}{}
+		ops = append(ops, SubgraphOperation{
+			SubgraphName: f.SubgraphName,
+			SubgraphID:   f.SubgraphID,
+			Query:        f.Query,
+		})
+	}
+
+	var walk func(node *resolve.FetchTreeQueryPlanNode)
+	walk = func(node *resolve.FetchTreeQueryPlanNode) {
+		if node == nil {
+			return
+		}
+		addFetch(node.Fetch)
+		addFetch(node.Trigger)
+		for _, c := range node.Children {
+			walk(c)
+		}
+	}
+
+	for _, root := range roots {
+		walk(root)
+	}
+
+	return ops
 }
 
 func (p *PlanWrapper) Marshal() ([]byte, error) {

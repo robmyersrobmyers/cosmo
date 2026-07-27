@@ -1,0 +1,152 @@
+---
+title: "Exporting Subgraph Persisted Operations"
+description: "Generate per-subgraph persisted operation files so a subgraph that is itself a router can enforce block_non_persisted_operations without a control plane."
+icon: "route"
+---
+
+## Why subgraph document text differs from the client operation
+
+A federated router does not forward the client's operation to a subgraph unchanged.
+Query planning rewrites each operation into a subgraph-specific document: a selection
+set scoped to that subgraph's schema, using `_entities(representations: ...)` for
+entity resolution. A subgraph therefore never receives the same document text (or the
+same persisted operation hash) that the client sent.
+
+This matters when a subgraph is itself a Cosmo Router configured with
+[`security.block_non_persisted_operations`](/router/configuration#security): the hash
+the client sent has no relationship to the subquery text the subgraph actually
+receives, so the subgraph router has no persisted operation to match it against.
+
+## What `export-persisted-operations` generates
+
+The `export-persisted-operations` command plans a set of GraphQL operations offline,
+against a local execution config, the same way `router query-plan` does. Instead of
+printing the query plan, it extracts the exact document text each subgraph fetch
+sends and writes it out in the persisted operation file format that a router's
+filesystem storage provider reads directly, with no CDN, S3, or control plane access
+required on either router.
+
+The document text for a given subgraph fetch is derived purely from the operation and
+the composed schema at plan time. Runtime variable values (including the JSON payload
+for `$representations`) never affect it, so the exported hash is stable across
+requests and safe to register as a persisted operation.
+
+## Generating the manifests
+
+Assume the following layout:
+
+```bash
+./operations/query1.graphql
+./operations/query2.graphql
+./execution-config.json
+./manifests
+```
+
+```bash
+./router export-persisted-operations -execution-config execution-config.json -operations operations -out-dir manifests
+```
+
+This creates one subdirectory per subgraph touched by any operation, each containing
+one `<sha256-hash>.json` file per unique document sent to that subgraph:
+
+```bash
+manifests/employees/1bd43d615cbb216c57cb55393e8aaac38bcc15719f964edf9fbfd0a63a0227f4.json
+manifests/products/c1f3b02196e56c3e98d56bfbb61d7e6682df5fe0f742722a6909a735155e64d2.json
+```
+
+Each file has the same shape a client-facing persisted operation manifest entry uses:
+
+```json
+{
+  "version": 1,
+  "body": "query($representations: [_Any!]!){\n    _entities(representations: $representations){\n        ... on Employee {\n            __typename\n            notes\n        }\n    }\n}"
+}
+```
+
+An operation that touches multiple subgraphs produces a file under each subgraph's
+directory. Re-running the export for the same operations and schema always produces
+byte-identical files, so it's safe to run repeatedly in CI and diff the output.
+
+### Report generation
+
+Add `-print-report` to also write a `manifests/report.json` file listing, per operation
+file, which subgraphs it touched (or the parse/plan error, if any):
+
+```json
+{
+  "files": [
+    { "file_name": "query1.graphql", "subgraphs": ["employees", "products"] },
+    { "file_name": "query2.graphql", "error": "..." }
+  ]
+}
+```
+
+Use `-fail-on-error` to make the command exit non-zero if any operation fails to
+export, and `-filter` to restrict the run to a list of operation file names, matching
+the equivalent options on `router query-plan`.
+
+## Configuring the subgraph router
+
+Ship each subgraph's output directory to that subgraph's own router (baked into its
+container image, mounted as a shared volume, or however the router's static execution
+config is already distributed), then point it at a filesystem storage provider:
+
+```yaml
+storage_providers:
+  file_system:
+    - id: "persisted-ops"
+      path: "/etc/router/persisted-operations/employees"
+
+persisted_operations:
+  storage:
+    provider_id: "persisted-ops"
+
+security:
+  block_non_persisted_operations:
+    enabled: true
+```
+
+<Warning>
+  A subquery's document text can change across router versions even when neither the
+  schema nor the client operations change, if the query planner's internals change
+  (representation field ordering, batching heuristics). Re-run the export whenever you
+  upgrade either router, not only when the schema or operations change, and treat a
+  hash mismatch after an upgrade as "re-export," not an outage.
+</Warning>
+
+<Note>
+  The bulk [PQL manifest](/router/persisted-queries/persisted-operations#pql-manifest)
+  (a single `manifest.json`) does not support filesystem storage providers. This
+  command targets the per-operation lookup format instead, which has no such
+  restriction.
+</Note>
+
+## Other options
+
+```bash
+./router export-persisted-operations
+  -concurrency int
+        how many operations to plan concurrently
+  -execution-config string
+        required, execution config file location
+  -fail-fast
+        stop as soon as possible if an operation fails to export
+  -fail-on-error
+        if at least one operation fails to export, the command exit code will be 1
+  -filter string
+        operation filter file location which should contain file names of operations to include
+  -help
+        Prints the help message
+  -log-level string
+        the log level to use (debug, info, warn, error, panic, fatal) (default "warn")
+  -max-collectors uint
+        max number of concurrent data source collectors, if unset or 0, no limit will be enforced
+  -operations string
+        required, source operations folder location
+  -out-dir string
+        required, output folder location; one subdirectory per subgraph name is created
+  -print-report
+        write a report.json file, with the subgraphs touched by each operation, sorted by file name
+  -timeout string
+        timeout (default "30s")
+```
