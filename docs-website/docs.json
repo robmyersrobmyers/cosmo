@@ -234,7 +234,8 @@
                   "router/security/tls",
                   "router/security/config-validation-and-signing",
                   "router/security/hardening-guide",
-                  "router/security/cost-control"
+                  "router/security/cost-control",
+                  "router/security/validate-inline-arguments"
                 ]
               },
               {
@@ -270,6 +271,7 @@
                     "icon": "cubes",
                     "pages": [
                       "router/cosmo-streams/custom-modules",
+                      "router/cosmo-streams/custom-modules/subscription-on-create",
                       "router/cosmo-streams/custom-modules/subscription-on-start",
                       "router/cosmo-streams/custom-modules/on-receive-event",
                       "router/cosmo-streams/custom-modules/on-publish-event"
@@ -289,6 +291,7 @@
                 ]
               },
               "router/relaxed-field-selection-merging-nullability",
+              "router/string-literals-for-enums",
               "router/file-upload",
               "router/access-logs",
               "router/profiling",

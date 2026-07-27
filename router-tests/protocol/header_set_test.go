@@ -1,23 +1,28 @@
 package integration
 
 import (
-	"github.com/wundergraph/cosmo/router-tests/testutils"
-
+	"bytes"
 	"fmt"
+	"io"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/wundergraph/cosmo/router-tests/testutils"
+
 	"github.com/MicahParks/jwkset"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
+
 	"github.com/wundergraph/cosmo/router-tests/jwks"
 	"github.com/wundergraph/cosmo/router-tests/testenv"
 	"github.com/wundergraph/cosmo/router/core"
 	"github.com/wundergraph/cosmo/router/pkg/authentication"
 	"github.com/wundergraph/cosmo/router/pkg/config"
-	"go.uber.org/zap"
 )
 
 func TestHeaderSet(t *testing.T) {
@@ -74,6 +79,28 @@ func TestHeaderSet(t *testing.T) {
 					Query:  fmt.Sprintf(`query { headerValue(name:"%s") }`, customHeader),
 				})
 				require.Equal(t, fmt.Sprintf(`{"data":{"headerValue":"%s"}}`, employeeVal), res.Body)
+			})
+		})
+
+		t.Run("global request rule sets header for defer", func(t *testing.T) {
+			t.Parallel()
+			testenv.Run(t, &testenv.Config{
+				RouterOptions: global(customHeader, employeeVal),
+			}, func(t *testing.T, xEnv *testenv.Environment) {
+				payload := []byte(fmt.Sprintf(`{"query":"query { ... @defer { headerValue(name:\"%s\") } }"}`, customHeader))
+
+				req := xEnv.MakeGraphQLDeferRequest(http.MethodPost, bytes.NewReader(payload))
+				res, err := xEnv.RouterClient.Do(req)
+				require.NoError(t, err)
+				defer func() { require.NoError(t, res.Body.Close()) }()
+				assert.Equal(t, http.StatusOK, res.StatusCode)
+
+				body, err := io.ReadAll(res.Body)
+				require.NoError(t, err)
+
+				bodyString := string(body)
+				assert.Contains(t, bodyString, `{"data":{},"pending":[{"id":"1","path":[]}],"hasNext":true}`)
+				assert.Contains(t, bodyString, fmt.Sprintf(`{"incremental":[{"data":{"headerValue":"%s"},"id":"1"}],"completed":[{"id":"1"}],"hasNext":false}`, employeeVal))
 			})
 		})
 	})
@@ -538,6 +565,81 @@ func TestHeaderSetWithExpression(t *testing.T) {
 				Query: query,
 			})
 			assert.Equal(t, `{"data":{"headerValue":"test-client 1.0.0"}}`, res.Body)
+		})
+	})
+}
+
+func TestHeaderSetFromFile(t *testing.T) {
+	t.Parallel()
+
+	const customHeader = "X-Custom-Header"
+
+	writeHeaderFile := func(t *testing.T, content string) string {
+		t.Helper()
+		path := filepath.Join(t.TempDir(), "header-value.txt")
+		require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
+		return path
+	}
+
+	getRule := func(name, path string) *config.RequestHeaderRule {
+		return &config.RequestHeaderRule{
+			Operation: config.HeaderRuleOperationSet,
+			Name:      name,
+			FromFile:  &config.FileHeaderSource{Path: path},
+		}
+	}
+
+	global := func(name, path string) []core.Option {
+		return []core.Option{
+			core.WithHeaderRules(config.HeaderRules{
+				All: &config.GlobalHeaderRule{
+					Request: []*config.RequestHeaderRule{
+						getRule(name, path),
+					},
+				},
+			}),
+		}
+	}
+
+	subgraph := func(subgraphName, name, path string) []core.Option {
+		return []core.Option{
+			core.WithHeaderRules(config.HeaderRules{
+				Subgraphs: map[string]*config.GlobalHeaderRule{
+					subgraphName: {
+						Request: []*config.RequestHeaderRule{
+							getRule(name, path),
+						},
+					},
+				},
+			}),
+		}
+	}
+
+	t.Run("global request rule sets header from file contents", func(t *testing.T) {
+		t.Parallel()
+		path := writeHeaderFile(t, "file-value")
+		testenv.Run(t, &testenv.Config{
+			RouterOptions: global(customHeader, path),
+		}, func(t *testing.T, xEnv *testenv.Environment) {
+			res := xEnv.MakeGraphQLRequestOK(testenv.GraphQLRequest{
+				Header: http.Header{},
+				Query:  fmt.Sprintf(`query { headerValue(name:"%s") }`, customHeader),
+			})
+			assert.Equal(t, `{"data":{"headerValue":"file-value"}}`, res.Body)
+		})
+	})
+
+	t.Run("subgraph request rule sets header from file contents", func(t *testing.T) {
+		t.Parallel()
+		path := writeHeaderFile(t, "file-value")
+		testenv.Run(t, &testenv.Config{
+			RouterOptions: subgraph("test1", customHeader, path),
+		}, func(t *testing.T, xEnv *testenv.Environment) {
+			res := xEnv.MakeGraphQLRequestOK(testenv.GraphQLRequest{
+				Header: http.Header{},
+				Query:  fmt.Sprintf(`query { headerValue(name:"%s") }`, customHeader),
+			})
+			assert.Equal(t, `{"data":{"headerValue":"file-value"}}`, res.Body)
 		})
 	})
 }

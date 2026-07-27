@@ -1,10 +1,18 @@
+import { create } from '@bufbuild/protobuf';
 import {
-  PublishFederatedSubgraphsResponse,
+  type PublishFederatedSubgraphsResponse,
+  PublishFederatedSubgraphsResponseSchema,
   BatchPublishJobStatus,
 } from '@wundergraph/cosmo-connect/dist/platform/v1/platform_pb';
 import { EnumStatusCode } from '@wundergraph/cosmo-connect/dist/common/common_pb';
 import { Client } from '../../../core/client/client.js';
 import { getBaseHeaders } from '../../../core/config.js';
+
+const EXPECTED_STATUS_CODES = new Set([
+  EnumStatusCode.OK,
+  EnumStatusCode.ERR_SUBGRAPH_COMPOSITION_FAILED,
+  EnumStatusCode.ERR_DEPLOYMENT_FAILED,
+]);
 
 export async function pollBatchPublishStatus(
   client: Client,
@@ -15,8 +23,9 @@ export async function pollBatchPublishStatus(
   const headers = getBaseHeaders();
   while (!signal.aborted) {
     const resp = await client.platform.getBatchPublishJobStatus({ jobId }, { headers, signal });
-    if (resp.response?.code !== EnumStatusCode.OK) {
-      return new PublishFederatedSubgraphsResponse({
+    const respCode = resp.response?.code;
+    if (respCode === undefined || !EXPECTED_STATUS_CODES.has(respCode)) {
+      return create(PublishFederatedSubgraphsResponseSchema, {
         response: resp.response,
       });
     }
@@ -28,7 +37,7 @@ export async function pollBatchPublishStatus(
         break;
       }
       case BatchPublishJobStatus.FAILED: {
-        return new PublishFederatedSubgraphsResponse({
+        return create(PublishFederatedSubgraphsResponseSchema, {
           response: {
             code: EnumStatusCode.ERR_SUBGRAPH_COMPOSITION_FAILED,
             details: resp.failureReason,
@@ -36,9 +45,13 @@ export async function pollBatchPublishStatus(
         });
       }
       case BatchPublishJobStatus.COMPLETED: {
-        return new PublishFederatedSubgraphsResponse({
+        return create(PublishFederatedSubgraphsResponseSchema, {
           response: { code: EnumStatusCode.OK },
-          ...resp,
+          compositionErrors: resp.compositionErrors,
+          deploymentErrors: resp.deploymentErrors,
+          compositionWarnings: resp.compositionWarnings,
+          counts: resp.counts,
+          updatedSubgraphNames: resp.updatedSubgraphNames,
         });
       }
     }
@@ -48,7 +61,7 @@ export async function pollBatchPublishStatus(
    * The only reason we should realistically get here is due to `signal` being aborted; however, we still need
    * to return a response object
    */
-  return new PublishFederatedSubgraphsResponse({
+  return create(PublishFederatedSubgraphsResponseSchema, {
     response: {
       code: EnumStatusCode.ERR,
       details: signal.aborted ? 'Operation was cancelled by the user.' : undefined,

@@ -110,6 +110,10 @@ func (b *ExecutorConfigurationBuilder) Build(ctx context.Context, opts *Executor
 		options.ApolloRouterCompatibilitySubrequestHTTPError = true
 	}
 
+	if opts.RouterEngineConfig.CostControl != nil && opts.RouterEngineConfig.CostControl.Enabled {
+		options.ResolvableOptions.EnableCostControl = true
+	}
+
 	if allowedFields := opts.RouterEngineConfig.SubgraphExtensionPropagation.AllowedExtensionFields; len(allowedFields) > 0 {
 		options.ResolvableOptions.AllowedSubgraphExtensions = make(map[string]struct{})
 		for _, field := range allowedFields {
@@ -260,6 +264,7 @@ func (b *ExecutorConfigurationBuilder) buildPlannerConfiguration(ctx context.Con
 	if routerEngineCfg.CostControl != nil && routerEngineCfg.CostControl.Enabled {
 		planConfig.ComputeCosts = true
 		planConfig.StaticCostDefaultListSize = routerEngineCfg.CostControl.EstimatedListSize
+		planConfig.IgnoreImplementingTypeWeights = routerEngineCfg.CostControl.IgnoreImplementingTypeWeights
 	}
 
 	return planConfig, providers, nil
