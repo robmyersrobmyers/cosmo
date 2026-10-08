@@ -18,6 +18,7 @@ import (
 	"github.com/wundergraph/graphql-go-tools/v2/pkg/asttransform"
 	"github.com/wundergraph/graphql-go-tools/v2/pkg/engine/datasource/introspection_datasource"
 	"github.com/wundergraph/graphql-go-tools/v2/pkg/engine/plan"
+	"github.com/wundergraph/graphql-go-tools/v2/pkg/engine/postprocess"
 	"github.com/wundergraph/graphql-go-tools/v2/pkg/engine/resolve"
 	"github.com/wundergraph/graphql-go-tools/v2/pkg/operationreport"
 )
@@ -49,6 +50,9 @@ type Executor struct {
 	Resolver        *resolve.Resolver
 	RenameTypeNames []resolve.RenameTypeName
 	TrackUsageInfo  bool
+	// PostprocessorOptions configure the plan postprocessor from the engine
+	// execution configuration (multi-fetch merging, fetch scheduling).
+	PostprocessorOptions []postprocess.ProcessorOption
 }
 
 type ExecutorBuildOptions struct {
@@ -148,7 +152,7 @@ func (b *ExecutorConfigurationBuilder) Build(ctx context.Context, opts *Executor
 
 	routerSchemaDefinition, report = astparser.ParseGraphqlDocumentString(opts.EngineConfig.GraphqlSchema)
 	if report.HasErrors() {
-		return nil, providers, fmt.Errorf("failed to parse graphql schema from engine config: %w", report)
+		return nil, providers, fmt.Errorf("failed to parse graphql schema from engine config: %w", &report)
 	}
 	// we need to merge the base schema, it contains the __schema and __type queries,
 	// as well as built-in scalars like Int, String, etc...
@@ -165,7 +169,7 @@ func (b *ExecutorConfigurationBuilder) Build(ctx context.Context, opts *Executor
 
 		clientSchema, report := astparser.ParseGraphqlDocumentString(clientSchemaStr)
 		if report.HasErrors() {
-			return nil, providers, fmt.Errorf("failed to parse graphql client schema from engine config: %w", report)
+			return nil, providers, fmt.Errorf("failed to parse graphql client schema from engine config: %w", &report)
 		}
 		err = asttransform.MergeDefinitionWithBaseSchema(&clientSchema)
 		if err != nil {
@@ -209,13 +213,22 @@ func (b *ExecutorConfigurationBuilder) Build(ctx context.Context, opts *Executor
 		}
 	}
 
+	var postprocessorOptions []postprocess.ProcessorOption
+	if opts.RouterEngineConfig.Execution.EnableMultiFetch {
+		postprocessorOptions = append(postprocessorOptions, postprocess.EnableMultiFetch())
+	}
+	if opts.RouterEngineConfig.Execution.EnableScheduleFetches {
+		postprocessorOptions = append(postprocessorOptions, postprocess.EnableScheduleFetches())
+	}
+
 	return &Executor{
-		PlanConfig:      *planConfig,
-		ClientSchema:    clientSchemaDefinition,
-		RouterSchema:    &routerSchemaDefinition,
-		Resolver:        resolver,
-		RenameTypeNames: renameTypeNames,
-		TrackUsageInfo:  b.trackUsageInfo,
+		PlanConfig:           *planConfig,
+		ClientSchema:         clientSchemaDefinition,
+		RouterSchema:         &routerSchemaDefinition,
+		Resolver:             resolver,
+		RenameTypeNames:      renameTypeNames,
+		TrackUsageInfo:       b.trackUsageInfo,
+		PostprocessorOptions: postprocessorOptions,
 	}, providers, nil
 }
 

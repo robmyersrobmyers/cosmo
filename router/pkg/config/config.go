@@ -9,10 +9,11 @@ import (
 
 	"github.com/caarlos0/env/v11"
 	"github.com/goccy/go-yaml"
+	"go.uber.org/zap/zapcore"
+
 	"github.com/wundergraph/cosmo/router/internal/unique"
 	"github.com/wundergraph/cosmo/router/internal/yamlmerge"
 	"github.com/wundergraph/cosmo/router/pkg/otel/otelconfig"
-	"go.uber.org/zap/zapcore"
 )
 
 const (
@@ -202,6 +203,7 @@ type Telemetry struct {
 type CORS struct {
 	Enabled          bool          `yaml:"enabled" envDefault:"true" env:"CORS_ENABLED"`
 	AllowOrigins     []string      `yaml:"allow_origins" envDefault:"*" env:"CORS_ALLOW_ORIGINS"`
+	MatchOrigins     []string      `yaml:"match_origins" env:"CORS_MATCH_ORIGINS" envSeparator:";"`
 	AllowMethods     []string      `yaml:"allow_methods" envDefault:"HEAD,GET,POST" env:"CORS_ALLOW_METHODS"`
 	AllowHeaders     []string      `yaml:"allow_headers" envDefault:"Origin,Content-Length,Content-Type" env:"CORS_ALLOW_HEADERS"`
 	AllowCredentials bool          `yaml:"allow_credentials" envDefault:"true" env:"CORS_ALLOW_CREDENTIALS"`
@@ -479,8 +481,9 @@ type EngineExecutionConfiguration struct {
 	// Deprecated: EnableExecutionPlanCacheResponseHeader is deprecated, use EngineDebugConfiguration.EnableCacheResponseHeaders instead.
 	EnableExecutionPlanCacheResponseHeader bool `envDefault:"false" env:"ENGINE_ENABLE_EXECUTION_PLAN_CACHE_RESPONSE_HEADER" yaml:"enable_execution_plan_cache_response_header"`
 
-	MaxConcurrentResolvers                           int           `envDefault:"1024" env:"ENGINE_MAX_CONCURRENT_RESOLVERS" yaml:"max_concurrent_resolvers,omitempty"`
-	EnableNetPoll                                    bool          `envDefault:"true" env:"ENGINE_ENABLE_NET_POLL" yaml:"enable_net_poll"`
+	MaxConcurrentResolvers int  `envDefault:"1024" env:"ENGINE_MAX_CONCURRENT_RESOLVERS" yaml:"max_concurrent_resolvers,omitempty"`
+	EnableNetPoll          bool `envDefault:"true" env:"ENGINE_ENABLE_NET_POLL" yaml:"enable_net_poll"`
+
 	ExecutionPlanCacheSize                           int64         `envDefault:"1024" env:"ENGINE_EXECUTION_PLAN_CACHE_SIZE" yaml:"execution_plan_cache_size,omitempty"`
 	SlowPlanCacheSize                                int64         `envDefault:"300" env:"ENGINE_SLOW_PLAN_CACHE_SIZE" yaml:"slow_plan_cache_size,omitempty"`
 	SlowPlanCacheThreshold                           time.Duration `envDefault:"100ms" env:"ENGINE_SLOW_PLAN_CACHE_THRESHOLD" yaml:"slow_plan_cache_threshold,omitempty"`
@@ -498,7 +501,22 @@ type EngineExecutionConfiguration struct {
 	DisableVariablesRemapping                        bool          `envDefault:"false" env:"ENGINE_DISABLE_VARIABLES_REMAPPING" yaml:"disable_variables_remapping"`
 	EnableRequireFetchReasons                        bool          `envDefault:"false" env:"ENGINE_ENABLE_REQUIRE_FETCH_REASONS" yaml:"enable_require_fetch_reasons"`
 	SubscriptionFetchTimeout                         time.Duration `envDefault:"30s" env:"ENGINE_SUBSCRIPTION_FETCH_TIMEOUT" yaml:"subscription_fetch_timeout,omitempty"`
+	SSEServerWriteTimeout                            time.Duration `envDefault:"10s" env:"ENGINE_SSE_SERVER_WRITE_TIMEOUT" yaml:"sse_server_write_timeout,omitempty"`
 	EnableDefer                                      bool          `envDefault:"false" env:"ENGINE_ENABLE_DEFER" yaml:"enable_defer"`
+
+	// EnableMultiFetch merges entity fetches to the same subgraph that execute
+	// in the same wave into a single batched request with aliased _entities fields.
+	// Enabled by default, set to false to send one request per entity fetch.
+	EnableMultiFetch bool `envDefault:"true" env:"ENGINE_ENABLE_MULTI_FETCH" yaml:"enable_multi_fetch"`
+	// EnableScheduleFetches replaces the legacy wave-based fetch organizers with the
+	// dependency-aware fetch scheduler (component-split, chain-inlined execution trees).
+	// Enabled by default, set to false to fall back to the wave-based organizers.
+	EnableScheduleFetches bool `envDefault:"true" env:"ENGINE_ENABLE_SCHEDULE_FETCHES" yaml:"enable_schedule_fetches"`
+	// EnableGRPCWireEncoding encodes gRPC request messages directly to the protobuf wire format.
+	// This is faster and uses less memory, because the router does not build dynamic protobuf messages.
+	// Enabled by default. Set to false to build request messages with protoreflect.
+	// Use this only as a fallback if a gRPC subgraph receives an incorrect request with wire encoding.
+	EnableGRPCWireEncoding bool `envDefault:"true" env:"ENGINE_ENABLE_GRPC_WIRE_ENCODING" yaml:"enable_grpc_wire_encoding"`
 
 	// Server-side WebSocket handler options (router accepting client connections)
 	WebSocketServerReadTimeout    time.Duration `envDefault:"5s" env:"ENGINE_WEBSOCKET_SERVER_READ_TIMEOUT" yaml:"websocket_server_read_timeout,omitempty"`
@@ -699,12 +717,23 @@ type HeaderSource struct {
 	ValuePrefixes []string `yaml:"value_prefixes"`
 }
 
+// JWTOnError controls how JWT credential failures are handled.
+type JWTOnError string
+
+const (
+	JWTOnErrorReject   JWTOnError = "reject"
+	JWTOnErrorContinue JWTOnError = "continue"
+)
+
 type JWTAuthenticationConfiguration struct {
 	JWKS              []JWKSConfiguration `yaml:"jwks"`
 	ScopeClaim        string              `yaml:"scope_claim" envDefault:"scope"`
 	HeaderName        string              `yaml:"header_name" envDefault:"Authorization"`
 	HeaderValuePrefix string              `yaml:"header_value_prefix" envDefault:"Bearer"`
 	HeaderSources     []HeaderSource      `yaml:"header_sources"`
+	// OnError controls whether invalid JWT credentials reject the request or are ignored.
+	// Required authentication and field authorization still apply.
+	OnError JWTOnError `yaml:"on_error" envDefault:"reject"`
 }
 
 type AuthenticationConfiguration struct {
@@ -733,6 +762,8 @@ type RateLimitConfiguration struct {
 	Debug               bool                        `yaml:"debug" envDefault:"false" env:"RATE_LIMIT_DEBUG"`
 	KeySuffixExpression string                      `yaml:"key_suffix_expression,omitempty" env:"RATE_LIMIT_KEY_SUFFIX_EXPRESSION"`
 	ErrorExtensionCode  RateLimitErrorExtensionCode `yaml:"error_extension_code"`
+	// ExcludeSubscriptions disables rate limiting for subscription operations only.
+	ExcludeSubscriptions bool `yaml:"exclude_subscriptions" envDefault:"false" env:"RATE_LIMIT_EXCLUDE_SUBSCRIPTIONS"`
 }
 
 type RateLimitErrorExtensionCode struct {
@@ -879,12 +910,17 @@ type EventsConfiguration struct {
 }
 
 type StreamsHandlerConfiguration struct {
-	OnReceiveEvents OnReceiveEventsConfiguration `yaml:"on_receive_events"`
+	OnReceiveEvents      OnReceiveEventsConfiguration      `yaml:"on_receive_events"`
+	BeforeEventsDispatch BeforeEventsDispatchConfiguration `yaml:"before_events_dispatch"`
 }
 
 type OnReceiveEventsConfiguration struct {
 	MaxConcurrentHandlers int           `yaml:"max_concurrent_handlers" envDefault:"100"`
 	HandlerTimeout        time.Duration `yaml:"handler_timeout" envDefault:"5s"`
+}
+
+type BeforeEventsDispatchConfiguration struct {
+	HandlerTimeout time.Duration `yaml:"handler_timeout" envDefault:"5s"`
 }
 
 type Cluster struct {
@@ -931,6 +967,8 @@ type WebSocketConfiguration struct {
 	Enabled bool `yaml:"enabled" envDefault:"true" env:"WEBSOCKETS_ENABLED"`
 	// AbsintheProtocol configuration for the Absinthe Protocol
 	AbsintheProtocol AbsintheProtocolConfiguration `yaml:"absinthe_protocol,omitempty"`
+	// DefaultSubprotocol is used when the client does not send a Sec-WebSocket-Protocol header. Empty rejects the connection.
+	DefaultSubprotocol string `yaml:"default_subprotocol,omitempty"`
 	// ForwardUpgradeHeaders true if the Router should forward Upgrade Request Headers in the Extensions payload when starting a Subscription on a Subgraph
 	ForwardUpgradeHeaders ForwardUpgradeHeadersConfiguration `yaml:"forward_upgrade_headers"`
 	// ForwardUpgradeQueryParamsInExtensions true if the Router should forward Upgrade Request Query Parameters in the Extensions payload when starting a Subscription on a Subgraph
@@ -1099,6 +1137,93 @@ type SubgraphExtensionPropagationConfiguration struct {
 	Enabled                bool                                  `yaml:"enabled" envDefault:"false" env:"ENABLED"`
 	AllowedExtensionFields []string                              `yaml:"allowed_extension_fields" env:"ALLOWED_EXTENSION_FIELDS"`
 	Algorithm              SubgraphExtensionPropagationAlgorithm `yaml:"algorithm,omitempty" envDefault:"first_write" env:"ALGORITHM"`
+}
+
+// ResponseCacheConfiguration configures caching of subgraph responses.
+type ResponseCacheConfiguration struct {
+	Enabled bool `yaml:"enabled" envDefault:"false" env:"ENABLED"`
+	// KeyPrefix namespaces keys against everything else sharing the store, so it
+	// is a redis concern only. The in memory provider shares its keyspace with
+	// nothing and ignores this.
+	KeyPrefix    string                          `yaml:"key_prefix" envDefault:"cosmo_response_cache:" env:"KEY_PREFIX"`
+	Storage      ResponseCacheStorageConfig      `yaml:"storage,omitempty" envPrefix:"STORAGE_"`
+	Invalidation ResponseCacheInvalidationConfig `yaml:"invalidation,omitempty" envPrefix:"INVALIDATION_"`
+	TagHeader    ResponseCacheTagHeaderConfig    `yaml:"cache_tag_header,omitempty" envPrefix:"CACHE_TAG_HEADER_"`
+	// All is what every subgraph gets unless Subgraphs names it.
+	All ResponseCacheSubgraphConfiguration `yaml:"all" envPrefix:"ALL_"`
+	// Subgraphs replaces All whole for the named subgraph; nothing is inherited.
+	// An entry is explicit: only yaml reaches it, so the env defaults All gets
+	// do not apply, and an omitted enabled is false. Keys are subgraph names.
+	Subgraphs map[string]ResponseCacheSubgraphConfiguration `yaml:"subgraphs,omitempty"`
+}
+
+// ResponseCacheSubgraphConfiguration is what the cache does for a subgraph.
+type ResponseCacheSubgraphConfiguration struct {
+	Enabled     bool          `yaml:"enabled" envDefault:"true" env:"ENABLED"`
+	FallbackTTL time.Duration `yaml:"fallback_ttl" envDefault:"30s" env:"FALLBACK_TTL"`
+	PrivateID   string        `yaml:"private_id,omitempty" env:"PRIVATE_ID"`
+}
+
+type ResponseCacheTagHeaderConfig struct {
+	Enabled   bool   `yaml:"enabled" envDefault:"false" env:"ENABLED"`
+	Name      string `yaml:"name,omitempty" envDefault:"Cache-Tag" env:"NAME"`
+	Delimiter string `yaml:"delimiter,omitempty" envDefault:"," env:"DELIMITER"`
+	// MaxBytes caps the header value; tags are packed coarsest first and the
+	// finest that do not fit are left out.
+	MaxBytes int `yaml:"max_bytes,omitempty" envDefault:"16384" env:"MAX_BYTES"`
+}
+
+// ResponseCacheInvalidationConfig selects which secondary indexes are built
+// over cached entries. Each is independent; all off caches entries untagged.
+type ResponseCacheInvalidationConfig struct {
+	// CacheTag indexes under the tags a subgraph declared in its
+	// apolloEntityCacheTags response extension.
+	CacheTag bool `yaml:"cache_tag" envDefault:"true" env:"CACHE_TAG"`
+	// Subgraph indexes under the subgraph that answered.
+	Subgraph bool `yaml:"subgraph" envDefault:"true" env:"SUBGRAPH"`
+	// Type indexes entities under their __typename.
+	Type bool `yaml:"type" envDefault:"true" env:"TYPE"`
+	// Endpoint serves invalidation requests against the indexes above.
+	Endpoint ResponseCacheInvalidationEndpointConfig `yaml:"endpoint,omitempty" envPrefix:"ENDPOINT_"`
+}
+
+type ResponseCacheInvalidationEndpointConfig struct {
+	Enabled    bool   `yaml:"enabled" envDefault:"false" env:"ENABLED"`
+	ListenAddr string `yaml:"listen_addr,omitempty" envDefault:"localhost:5027" env:"LISTEN_ADDR"`
+	Path       string `yaml:"path,omitempty" envDefault:"/invalidation" env:"PATH"`
+	SharedKey  string `yaml:"shared_key,omitempty" env:"SHARED_KEY"`
+}
+
+// ResponseCacheStorageProvider names the backend a response cache is built on.
+type ResponseCacheStorageProvider string
+
+const (
+	// ResponseCacheStorageProviderRedis stores entries in the redis instance named
+	// by ProviderID, so every router replica shares one cache and entries
+	// outlive the process. This is the default, because it is the only one of the
+	// two that a reader of the configuration would not want to be surprised by.
+	ResponseCacheStorageProviderRedis ResponseCacheStorageProvider = "redis"
+	// ResponseCacheStorageProviderMemory stores entries in the router process. Each
+	// replica then has a cache of its own and nothing survives a restart, so it
+	// has to be asked for by name rather than fallen back into.
+	ResponseCacheStorageProviderMemory ResponseCacheStorageProvider = "memory"
+)
+
+type ResponseCacheStorageConfig struct {
+	// Provider selects the backend. An empty value is read as
+	// ResponseCacheStorageProviderRedis, both because that is what this field
+	// defaults to and because it is what a configuration assembled in go, which
+	// never passes through the yaml defaults, still means.
+	Provider ResponseCacheStorageProvider `yaml:"provider,omitempty" envDefault:"redis" env:"PROVIDER"`
+	// ProviderID names a redis storage provider declared under
+	// storage_providers.redis and only means anything with
+	// ResponseCacheStorageProviderRedis.
+	ProviderID string `yaml:"provider_id,omitempty" env:"PROVIDER_ID"`
+	// MaxEntries caps how many entries the in memory provider holds and is
+	// ignored by redis, which is capped where it lives rather than from here.
+	// Entries are counted, not measured, so what this costs depends on how big
+	// the cached subgraph responses are.
+	MaxEntries int64 `yaml:"max_entries,omitempty" envDefault:"10000" env:"MAX_ENTRIES"`
 }
 
 type StorageProviders struct {
@@ -1353,12 +1478,27 @@ type MCPConfiguration struct {
 	// ResourceDocumentation is a URL to a human-readable page describing this MCP resource,
 	// its access policies, and how to get started. Included in RFC 9728 Protected Resource Metadata if set.
 	ResourceDocumentation string `yaml:"resource_documentation,omitempty" env:"MCP_RESOURCE_DOCUMENTATION"`
+	// OutputSchema configures MCP structured tool output (outputSchema + structuredContent).
+	OutputSchema MCPOutputSchemaConfiguration `yaml:"output_schema,omitempty"`
+}
+
+// MCPOutputSchemaConfiguration configures MCP structured tool output (spec revision 2025-06-18):
+// an output schema declared on operation tools and structured content on successful tool
+// results. A tool whose schema cannot be derived stays registered without an output schema.
+// Disabled by default because it increases tools/list and result payload sizes.
+type MCPOutputSchemaConfiguration struct {
+	Enabled bool `yaml:"enabled" envDefault:"false" env:"MCP_OUTPUT_SCHEMA_ENABLED"`
 }
 
 type MCPOAuthConfiguration struct {
-	Enabled                bool                `yaml:"enabled" envDefault:"false" env:"ENABLED"`
-	JWKS                   []JWKSConfiguration `yaml:"jwks"`
-	AuthorizationServerURL string              `yaml:"authorization_server_url,omitempty" env:"AUTHORIZATION_SERVER_URL"`
+	Enabled bool                `yaml:"enabled" envDefault:"false" env:"ENABLED"`
+	JWKS    []JWKSConfiguration `yaml:"jwks"`
+	// Deprecated: AuthorizationServerURL is deprecated, use AuthorizationServerURLs instead.
+	AuthorizationServerURL string `yaml:"authorization_server_url,omitempty" env:"AUTHORIZATION_SERVER_URL"`
+	// AuthorizationServerURLs configures multiple OAuth 2.0 authorization servers.
+	// All entries are advertised in the RFC 9728 Protected Resource Metadata.
+	// Use AuthorizationServers to read the merged list of both fields.
+	AuthorizationServerURLs []string `yaml:"authorization_server_urls,omitempty" env:"AUTHORIZATION_SERVER_URLS"`
 	// Scopes configures which OAuth scopes are required for different MCP operations.
 	Scopes MCPOAuthScopesConfiguration `yaml:"scopes,omitempty" envPrefix:"SCOPES_"`
 	// ScopeChallengeIncludeTokenScopes controls whether the server includes the token's existing scopes
@@ -1371,6 +1511,25 @@ type MCPOAuthConfiguration struct {
 	// produced when computing the Cartesian product of @requiresScopes across fields.
 	// Increase for complex RBAC configurations.
 	MaxScopeCombinations int `yaml:"max_scope_combinations" envDefault:"2048" env:"MAX_SCOPE_COMBINATIONS"`
+}
+
+// AuthorizationServers returns all configured authorization server URLs.
+// It merges AuthorizationServerURL with AuthorizationServerURLs.
+// The single URL comes first. Empty and duplicate entries are removed.
+func (c MCPOAuthConfiguration) AuthorizationServers() []string {
+	var servers []string
+	seen := make(map[string]struct{}, len(c.AuthorizationServerURLs)+1)
+	for _, url := range append([]string{c.AuthorizationServerURL}, c.AuthorizationServerURLs...) {
+		if url == "" {
+			continue
+		}
+		if _, ok := seen[url]; ok {
+			continue
+		}
+		seen[url] = struct{}{}
+		servers = append(servers, url)
+	}
+	return servers
 }
 
 // MCPOAuthScopesConfiguration defines which scopes are required for different MCP operations.
@@ -1392,6 +1551,9 @@ type MCPOAuthScopesConfiguration struct {
 	// GetSchema specifies scopes required to call the get_schema built-in tool.
 	// Additive to tools_call scopes. Only relevant when expose_schema is true.
 	GetSchema []string `yaml:"get_schema,omitempty" env:"GET_SCHEMA"`
+	// GenerateQuery specifies scopes required to call the generate_query built-in tool.
+	// Additive to tools_call scopes. Only relevant when query generation is enabled.
+	GenerateQuery []string `yaml:"generate_query,omitempty" env:"GENERATE_QUERY"`
 }
 
 type MCPSessionConfig struct {
@@ -1405,6 +1567,26 @@ type MCPStorageConfig struct {
 type MCPServer struct {
 	ListenAddr string `yaml:"listen_addr" envDefault:"localhost:5025" env:"MCP_SERVER_LISTEN_ADDR"`
 	BaseURL    string `yaml:"base_url,omitempty" env:"MCP_SERVER_BASE_URL"`
+	// Version is reported to MCP clients as the server version in serverInfo.
+	// Defaults to the router release version when unset.
+	Version string `yaml:"version,omitempty" env:"MCP_SERVER_VERSION"`
+	// Title is a human-readable display name for this MCP server, reported in
+	// serverInfo. MCP clients show it in UIs, falling back to the machine name
+	// derived from graph_name when unset.
+	Title string `yaml:"title,omitempty" env:"MCP_SERVER_TITLE"`
+	// Description is a human-readable description of this MCP server, reported
+	// in serverInfo.
+	Description string            `yaml:"description,omitempty" env:"MCP_SERVER_DESCRIPTION"`
+	Discover    MCPDiscoverConfig `yaml:"discover,omitempty" envPrefix:"MCP_SERVER_DISCOVER_"`
+}
+
+// MCPDiscoverConfig configures the server identity exposed via the MCP
+// server/discover method (SEP-2575, protocol version 2026-07-28).
+type MCPDiscoverConfig struct {
+	// Instructions is natural-language guidance for MCP clients on how to use this
+	// server. It is served in the server/discover response and in the legacy
+	// initialize response, so all clients receive it regardless of era.
+	Instructions string `yaml:"instructions,omitempty" env:"INSTRUCTIONS"`
 }
 
 type ConnectRPCConfiguration struct {
@@ -1456,12 +1638,12 @@ type Config struct {
 	ConnectRPC     ConnectRPCConfiguration `yaml:"connect_rpc,omitempty"`
 	DemoMode       bool                    `yaml:"demo_mode,omitempty" envDefault:"false" env:"DEMO_MODE"`
 
-	Modules        map[string]interface{} `yaml:"modules,omitempty"`
-	Headers        HeaderRules            `yaml:"headers,omitempty"`
-	TrafficShaping TrafficShapingRules    `yaml:"traffic_shaping,omitempty" envPrefix:"TRAFFIC_SHAPING_"`
-	FileUpload     FileUpload             `yaml:"file_upload,omitempty"`
-	AccessLogs     AccessLogsConfig       `yaml:"access_logs,omitempty"`
-	Batching       BatchingConfig         `yaml:"batching,omitempty"`
+	Modules        map[string]any      `yaml:"modules,omitempty"`
+	Headers        HeaderRules         `yaml:"headers,omitempty"`
+	TrafficShaping TrafficShapingRules `yaml:"traffic_shaping,omitempty" envPrefix:"TRAFFIC_SHAPING_"`
+	FileUpload     FileUpload          `yaml:"file_upload,omitempty"`
+	AccessLogs     AccessLogsConfig    `yaml:"access_logs,omitempty"`
+	Batching       BatchingConfig      `yaml:"batching,omitempty"`
 
 	ListenAddr                    string                      `yaml:"listen_addr" envDefault:"localhost:3002" env:"LISTEN_ADDR"`
 	ControlplaneURL               string                      `yaml:"controlplane_url" envDefault:"https://cosmo-cp.wundergraph.com" env:"CONTROLPLANE_URL"`
@@ -1490,6 +1672,7 @@ type Config struct {
 	DevelopmentMode               bool                        `yaml:"dev_mode" envDefault:"false" env:"DEV_MODE"`
 	Events                        EventsConfiguration         `yaml:"events,omitempty"`
 	CacheWarmup                   CacheWarmupConfiguration    `yaml:"cache_warmup,omitempty"`
+	ResponseCache                 ResponseCacheConfiguration  `yaml:"response_cache,omitempty" envPrefix:"RESPONSE_CACHE_"`
 
 	RouterConfigPath   string `yaml:"router_config_path,omitempty" env:"ROUTER_CONFIG_PATH"`
 	RouterRegistration bool   `yaml:"router_registration" env:"ROUTER_REGISTRATION" envDefault:"true"`

@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.21.0](https://github.com/wundergraph/cosmo/compare/helm-cosmo@0.20.0...helm-cosmo@0.21.0) (2026-10-06)
+
+
+### Features
+
+* implement ptq rpc and index schemas ([#3138](https://github.com/wundergraph/cosmo/issues/3138)) ([0cfafef](https://github.com/wundergraph/cosmo/commit/0cfafef170f9c8d45a8a66afbb10cb4d72fc5971))
+* implement script for enabling `split-config-loading` ([#3227](https://github.com/wundergraph/cosmo/issues/3227)) ([e7162a7](https://github.com/wundergraph/cosmo/commit/e7162a756430e32d845ad0fe2f4152df59e01a03))
+
+
+### Bug Fixes
+
+* **helm:** allow disabling component ingress routes independently ([#3297](https://github.com/wundergraph/cosmo/issues/3297)) ([d2f3a95](https://github.com/wundergraph/cosmo/commit/d2f3a95d0ef82997ee131043e411671297b2e577))
+
+## [0.20.0](https://github.com/wundergraph/cosmo/compare/helm-cosmo@0.19.0...helm-cosmo@0.20.0) (2026-07-27)
+
+
+### Features
+
+* add script to delete data older than 90 days ([#2693](https://github.com/wundergraph/cosmo/issues/2693)) ([068592b](https://github.com/wundergraph/cosmo/commit/068592b99aaf5650327b7db7a5d0c4d421b345cc))
+* cron to enqueue inactive organizations for deletion ([#2418](https://github.com/wundergraph/cosmo/issues/2418)) ([1658315](https://github.com/wundergraph/cosmo/commit/1658315cb996954dd00c5c1af1bf2edf3509bb27))
+
 ## [0.19.0](https://github.com/wundergraph/cosmo/compare/helm-cosmo@0.18.0...helm-cosmo@0.19.0) (2026-06-04)
 
 
