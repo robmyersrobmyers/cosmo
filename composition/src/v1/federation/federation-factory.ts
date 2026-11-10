@@ -27,7 +27,9 @@ import {
   allChildDefinitionsAreInaccessibleError,
   allExternalFieldInstancesError,
   configureDescriptionPropagationError,
+  fromContextCacheTagReferenceErrorMessage,
   requiredContextArgumentError,
+  inaccessibleCacheTagReferenceErrorMessage,
   inaccessibleQueryRootTypeError,
   inaccessibleRequiredInputValueError,
   incompatibleFederatedFieldNamedTypeError,
@@ -69,6 +71,7 @@ import {
   subscriptionFilterNoAccessibleConcreteTypesError,
   subscriptionFilterUnionMemberInvalidError,
   subscriptionFilterUnsupportedNamedTypeKindError,
+  unavailableCacheTagReferencesError,
   undefinedEntityInterfaceImplementationsError,
   undefinedSubscriptionFieldConditionFieldPathFieldErrorMessage,
   undefinedTypeError,
@@ -249,7 +252,7 @@ import {
   type SubgraphName,
   type TypeName,
 } from '../../types/types';
-import { singleFederatedInputFieldOneOfWarning } from '../warnings/warnings';
+import { inconsistentCacheTagFormatsWarning, singleFederatedInputFieldOneOfWarning } from '../warnings/warnings';
 import {
   type ExtractFederatedDirectivesParams,
   type FederateSubgraphsContractV1Params,
@@ -881,6 +884,10 @@ export class FederationFactory {
     }
   }
 
+  /* Note that this cannot be done at normalization time because the argument's field or parent type could be
+   * declared @inaccessible in another subgraph.
+   * This means validity can only be assessed post-federation.
+   */
   handleInputValueInaccessibility(isParentInaccessible: boolean, inputValueData: InputValueData, parentCoords: string) {
     /* If an ancestor (Input Object for field; Composite type or field for argument) of the input value is
      * @inaccessible, nullability is not considered.
@@ -894,6 +901,7 @@ export class FederationFactory {
     if (!isNodeDataInaccessible(inputValueData)) {
       return;
     }
+
     if (isTypeRequired(inputValueData.type)) {
       this.inaccessibleRequiredInputValueErrorByCoords.set(
         inputValueData.federatedCoords,
@@ -901,6 +909,7 @@ export class FederationFactory {
       );
       return;
     }
+
     this.inaccessibleCoords.add(inputValueData.federatedCoords);
   }
 
@@ -1103,6 +1112,10 @@ export class FederationFactory {
       source: incomingData.nullLevelsBySubgraphName,
       target: targetData.nullLevelsBySubgraphName,
     });
+    addMapEntries({
+      source: incomingData.cacheTagDataBySubgraphName,
+      target: targetData.cacheTagDataBySubgraphName,
+    });
     addIterableToSet({
       source: incomingData.subgraphNames,
       target: targetData.subgraphNames,
@@ -1257,6 +1270,7 @@ export class FederationFactory {
         isInaccessible,
         sourceData.federatedCoords,
       ),
+      cacheTagDataBySubgraphName: new Map(sourceData.cacheTagDataBySubgraphName),
       configureDescriptionDataBySubgraphName: copyObjectValueMap(sourceData.configureDescriptionDataBySubgraphName),
       directivesByName: copyArrayValueMap(sourceData.directivesByName),
       externalFieldDataBySubgraphName: copyObjectValueMap(sourceData.externalFieldDataBySubgraphName),
@@ -2019,24 +2033,35 @@ export class FederationFactory {
     this.errors.push(configureDescriptionPropagationError(getDefinitionDataCoords(data, true), subgraphNames));
   }
 
+  // Returns true if the argument defines `fromContext` and false otherwise.
+  handleArgumentFromContext(data: InputValueData): boolean {
+    if (!doesArgumentDefineFromContext(data)) {
+      return false;
+    }
+
+    if (data.requiredSubgraphNames.size > 0) {
+      this.errors.push(
+        requiredContextArgumentError(
+          data.federatedCoords,
+          [...data.fromContextSubgraphNames],
+          [...data.requiredSubgraphNames],
+        ),
+      );
+    }
+
+    return true;
+  }
+
   getValidFieldArgumentNodes(fieldData: FieldData): MutableInputValueNode[] {
     const argumentNodes: Array<MutableInputValueNode> = [];
     const argumentNames: Array<string> = [];
     const invalidRequiredArguments: InvalidRequiredInputValueData[] = [];
     const fieldCoords = `${fieldData.renamedParentTypeName}.${fieldData.name}`;
     for (const [argumentName, inputValueData] of fieldData.argumentDataByName) {
-      if (doesArgumentDefineFromContext(inputValueData)) {
-        if (inputValueData.requiredSubgraphNames.size > 0) {
-          this.errors.push(
-            requiredContextArgumentError(
-              inputValueData.federatedCoords,
-              [...inputValueData.fromContextSubgraphNames],
-              [...inputValueData.requiredSubgraphNames],
-            ),
-          );
-        }
+      if (this.handleArgumentFromContext(inputValueData)) {
         continue;
       }
+
       if (fieldData.subgraphNames.size === inputValueData.subgraphNames.size) {
         argumentNames.push(argumentName);
         const argumentNodeResult = routerSchemaInputValueNodeFromData({
@@ -2059,6 +2084,7 @@ export class FederationFactory {
         });
       }
     }
+
     if (invalidRequiredArguments.length > 0) {
       this.errors.push(invalidRequiredInputValueError(FIELD, fieldCoords, invalidRequiredArguments));
     } else if (argumentNames.length > 0) {
@@ -2070,6 +2096,78 @@ export class FederationFactory {
       })).argumentNames = argumentNames;
     }
     return argumentNodes;
+  }
+
+  /* An "$args" reference of a @cacheTag format must not reach an @inaccessible or @fromContext input value.
+   * A reference to an input value that only some subgraphs define is accepted.
+   * A response carries only the formats of the subgraph that resolves the Query root field,
+   * so formats that differ between the subgraphs resolving that field produce tags that depend on the query plan.
+   */
+  validateCacheTagFormats(fieldData: FieldData) {
+    if (fieldData.cacheTagDataBySubgraphName.size < 1) {
+      return;
+    }
+    const formatsBySubgraphName = new Map<SubgraphName, Set<string>>();
+    const errorMessages = new Set<string>();
+    // A subgraph from which the field is overridden is absent from isShareableBySubgraphName.
+    for (const subgraphName of fieldData.isShareableBySubgraphName.keys()) {
+      const externalFieldData = fieldData.externalFieldDataBySubgraphName.get(subgraphName);
+      if (externalFieldData && !externalFieldData.isUnconditionallyProvided) {
+        continue;
+      }
+      const cacheTagData = fieldData.cacheTagDataBySubgraphName.get(subgraphName);
+      // An untagged subgraph gets an empty set, so it mismatches a tagged one and the warning names it.
+      formatsBySubgraphName.set(subgraphName, cacheTagData?.formats ?? new Set<string>());
+      for (const reference of cacheTagData?.references ?? []) {
+        const errorMessage = this.validateCacheTagReference(fieldData, subgraphName, reference);
+        if (errorMessage) {
+          errorMessages.add(errorMessage);
+        }
+      }
+    }
+    if (errorMessages.size > 0) {
+      this.errors.push(unavailableCacheTagReferencesError(fieldData.federatedCoords, [...errorMessages]));
+    }
+    const [formats, ...otherFormats] = formatsBySubgraphName.values();
+    if (otherFormats.every((other) => other.size === formats.size && other.isSubsetOf(formats))) {
+      return;
+    }
+    this.warnings.push(
+      inconsistentCacheTagFormatsWarning({ coords: fieldData.federatedCoords, formatsBySubgraphName }),
+    );
+  }
+
+  // Returns an error message if an input value on the path of an "$args" reference is @inaccessible or @fromContext.
+  validateCacheTagReference(fieldData: FieldData, subgraphName: SubgraphName, reference: string): string | undefined {
+    /* The first segment is an argument of the field; each following segment is a field of an Input Object.
+     * NormalizationFactory.getCacheTagArgumentData has already rejected a path that does not resolve,
+     * or that traverses a list or a leaf.
+     */
+    let inputValueDataByName = fieldData.argumentDataByName;
+    for (const name of reference.split(LITERAL_PERIOD)) {
+      const data = inputValueDataByName.get(name);
+      // A conflicting definition has already been reported.
+      if (!data) {
+        return;
+      }
+      const params = { coords: data.federatedCoords, reference, subgraphName };
+      // A required argument that defines @fromContext is reported by its own error.
+      if (doesArgumentDefineFromContext(data)) {
+        return isTypeRequired(data.type) ? undefined : fromContextCacheTagReferenceErrorMessage(params);
+      }
+      // A required input value declared @inaccessible may have been reported by its own error.
+      if (isNodeDataInaccessible(data)) {
+        return this.inaccessibleRequiredInputValueErrorByCoords.has(data.federatedCoords)
+          ? undefined
+          : inaccessibleCacheTagReferenceErrorMessage(params);
+      }
+      const namedTypeData = this.parentDefinitionDataByTypeName.get(data.namedTypeName);
+      // Either the reference ends at this leaf, or a conflicting type has already been reported.
+      if (namedTypeData?.kind !== Kind.INPUT_OBJECT_TYPE_DEFINITION) {
+        return;
+      }
+      inputValueDataByName = namedTypeData.inputValueDataByName;
+    }
   }
 
   validateSemanticNonNull(data: FieldData) {
@@ -2198,6 +2296,7 @@ export class FederationFactory {
             this.internalGraph.setNodeInaccessible(parentDefinitionData.name);
             break;
           }
+
           if (clientEnumValueNodes.length < 1) {
             this.errors.push(
               allChildDefinitionsAreInaccessibleError(
@@ -2220,6 +2319,7 @@ export class FederationFactory {
           if (IGNORED_FEDERATED_TYPE_NAMES.has(parentTypeName)) {
             break;
           }
+
           const invalidRequiredInputs = new Array<InvalidRequiredInputValueData>();
           const inputValueNodes = new Array<MutableInputValueNode>();
           const clientInputValueNodes = new Array<MutableInputValueNode>();
@@ -2265,6 +2365,7 @@ export class FederationFactory {
             );
             break;
           }
+
           if (
             !this.validateOneOfDirective({
               data: parentDefinitionData,
@@ -2274,6 +2375,7 @@ export class FederationFactory {
           ) {
             break;
           }
+
           parentDefinitionData.node.fields = inputValueNodes;
           const inputObjectNodeResult = routerSchemaNodeFromData<InputObjectDefinitionData>({
             data: parentDefinitionData,
@@ -2290,6 +2392,7 @@ export class FederationFactory {
             this.validateReferencesOfInaccessibleType(parentDefinitionData);
             break;
           }
+
           if (clientInputValueNodes.length < 1) {
             this.errors.push(
               allChildDefinitionsAreInaccessibleError(
@@ -2300,6 +2403,7 @@ export class FederationFactory {
             );
             break;
           }
+
           this.clientDefinitions.push({
             ...parentDefinitionData.node,
             directives: getClientFederatedDirectiveNodes(parentDefinitionData),
@@ -2315,6 +2419,7 @@ export class FederationFactory {
           const graphFieldDataByFieldName = new Map<FieldName, GraphFieldData>();
           const invalidFieldNames = newInvalidFieldNames();
           const isObject = parentDefinitionData.kind === Kind.OBJECT_TYPE_DEFINITION;
+          const isQuery = isNodeQuery(parentTypeName);
           const authData = this.authorizationDataByParentTypeName.get(parentTypeName);
           propagateAuthDirectives(parentDefinitionData, authData);
           for (const [fieldName, fieldData] of parentDefinitionData.fieldDataByName) {
@@ -2340,6 +2445,11 @@ export class FederationFactory {
             if (isNodeDataInaccessible(fieldData)) {
               continue;
             }
+
+            // An inaccessible field, e.g., one excluded from a contract, cannot be queried, so it produces no tags.
+            if (isQuery) {
+              this.validateCacheTagFormats(fieldData);
+            }
             clientSchemaFieldNodes.push(getClientSchemaFieldNodeByFieldData(fieldData));
             graphFieldDataByFieldName.set(fieldName, this.fieldDataToGraphFieldData(fieldData));
           }
@@ -2360,6 +2470,7 @@ export class FederationFactory {
             interfaceImplementations.push({ data: parentDefinitionData, clientSchemaFieldNodes });
             break;
           }
+
           const nodeResult = routerSchemaNodeFromData<ObjectDefinitionData>({
             data: parentDefinitionData,
             description: this.getFederatedGraphNodeDescription(parentDefinitionData),
@@ -2371,16 +2482,17 @@ export class FederationFactory {
           } else {
             this.errors.push(...nodeResult.errors);
           }
-          const isQuery = isNodeQuery(parentTypeName);
           if (isNodeDataInaccessible(parentDefinitionData)) {
             if (isQuery) {
               this.errors.push(inaccessibleQueryRootTypeError);
               break;
             }
+
             this.validateReferencesOfInaccessibleType(parentDefinitionData);
             this.internalGraph.setNodeInaccessible(parentDefinitionData.name);
             break;
           }
+
           if (clientSchemaFieldNodes.length < 1) {
             const error = isQuery
               ? noQueryRootTypeError(false)
@@ -2392,6 +2504,7 @@ export class FederationFactory {
             this.errors.push(error);
             break;
           }
+
           this.clientDefinitions.push({
             ...parentDefinitionData.node,
             directives: getClientFederatedDirectiveNodes(parentDefinitionData),
