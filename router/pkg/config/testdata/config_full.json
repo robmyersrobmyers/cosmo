@@ -253,11 +253,14 @@
           "Enabled": true
         }
       }
-    }
+    },
+    "Watch": true,
+    "WatchInterval": 5000000000
   },
   "CacheControl": {
     "Enabled": true,
     "Value": "max-age=180, public",
+    "MissingNoStore": true,
     "Subgraphs": [
       {
         "Name": "products",
@@ -1309,6 +1312,9 @@
     },
     "SkipNullVariablesError": {
       "Enabled": false
+    },
+    "CacheControlAnyPublic": {
+      "Enabled": true
     }
   },
   "ClientHeader": {

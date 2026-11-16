@@ -184,11 +184,14 @@
         "Enabled": false
       },
       "Subgraphs": null
-    }
+    },
+    "Watch": false,
+    "WatchInterval": 1000000000
   },
   "CacheControl": {
     "Enabled": false,
     "Value": "",
+    "MissingNoStore": false,
     "Subgraphs": null
   },
   "MCP": {
@@ -765,6 +768,9 @@
       "Enabled": false
     },
     "SkipNullVariablesError": {
+      "Enabled": false
+    },
+    "CacheControlAnyPublic": {
       "Enabled": false
     }
   },
