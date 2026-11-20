@@ -11,7 +11,8 @@ type ModuleConfig struct {
 
 	// ClientSchema returns the client schema of the active graph for the given feature flag.
 	// The empty name is the base graph. It returns nil for an unknown feature flag and before the
-	// first graph server is running, for example during Provision. After a config reload it
+	// first graph server is running, for example during Provision. To act on the schema at startup,
+	// implement ClientSchemaHandler. After a config reload it
 	// returns the new schema, so call it when needed and don't keep the result.
 	ClientSchema func(featureFlag string) *SchemaSnapshot
 }

@@ -518,6 +518,17 @@ func (m *MyModule) Middleware(ctx core.RequestContext, next http.Handler) {
 - `Digest` is the hex SHA-256 of the SDL.
 - `Revision` is the router config version the schema came from.
 
+To act on the schema at startup, for example to pre-compute data from it, implement `core.ClientSchemaHandler`:
+
+```go
+func (m *MyModule) OnClientSchema(featureFlag string, schema *core.SchemaSnapshot) error {
+    // featureFlag is "" for the base graph
+    return m.index(featureFlag, schema.SDL())
+}
+```
+
+The router calls `OnClientSchema` for the base graph and each feature flag graph when it starts, and again for every graph a config reload rebuilds. Graphs a reload reuses unchanged are not reported again. The call happens before the new graph serves traffic, so use the `schema` argument rather than `ctx.Config.ClientSchema`. If the handler returns an error, the router does not start, or on a reload it rejects the new config and keeps serving the previous one. The handler runs on the startup or reload goroutine, so keep it fast.
+
 ## Migrations
 
 ### From pre-0.278.0 to 0.278.0+: Request Deduplication

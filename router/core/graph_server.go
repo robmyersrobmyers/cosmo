@@ -488,6 +488,10 @@ func newGraphServer(routerCtx context.Context, r *Router, response *routerconfig
 	// in their original state (reused=false, not in this server's graphMuxList)
 	// so a subsequent reload that no longer reuses them will still shut them
 	// down correctly.
+	if err := r.notifyClientSchemaHandlers(s); err != nil {
+		return nil, err
+	}
+
 	s.commitReusedMuxes(reusedMuxes)
 
 	return s, nil
