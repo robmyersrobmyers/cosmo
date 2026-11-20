@@ -645,6 +645,17 @@ type OperationContext interface {
 
 	// RawContent returns the raw content associated with the operation
 	RawContent() string
+
+	// PersistedID returns the persisted operation ID the request supplied. It is empty when the request
+	// carried none. When safelist or log_unknown is enabled the router also fills it with the operation's
+	// computed SHA-256 for requests that sent a plain query, so use IsPersisted to tell the two apart.
+	PersistedID() string
+
+	// IsPersisted reports whether the router resolved the operation as a persisted operation.
+	// With automatic persisted queries (APQ) enabled, an operation that a client registered itself
+	// also reports true. To check that an operation is approved, look PersistedID up in the
+	// manifest returned by ModuleContext.Config.PersistedOperations.Manifest.
+	IsPersisted() bool
 }
 
 var _ OperationContext = (*operationContext)(nil)
@@ -688,6 +699,7 @@ type operationContext struct {
 	extensions       []byte
 	inlineArguments  []string
 	persistedID      string
+	isPersisted      bool
 	// Hash on the original operation
 	sha256Hash string
 	protocol   OperationProtocol
@@ -748,6 +760,10 @@ func (o *operationContext) Content() string {
 
 func (o *operationContext) PersistedID() string {
 	return o.persistedID
+}
+
+func (o *operationContext) IsPersisted() bool {
+	return o.isPersisted
 }
 
 func (o *operationContext) Protocol() OperationProtocol {
@@ -907,15 +923,6 @@ func (o *operationContext) Cost() (OperationCost, error) {
 
 func (o *operationContext) RawContent() string {
 	return o.rawContent
-}
-
-// isMutationRequest returns true if the current request is a mutation request
-func isMutationRequest(ctx context.Context) bool {
-	op := getRequestContext(ctx)
-	if op == nil {
-		return false
-	}
-	return op.Operation().Type() == "mutation"
 }
 
 type SubgraphResolver struct {

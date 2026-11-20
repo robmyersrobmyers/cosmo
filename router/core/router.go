@@ -750,6 +750,7 @@ func (r *Router) initModules(ctx context.Context) error {
 			PrometheusMeterProvider: r.promMeterProvider,
 			OTLPMeterProvider:       r.otlpMeterProvider,
 		}
+		mc.Config = r.moduleContextConfig()
 
 		moduleConfig, ok := r.modulesConfig[string(moduleInfo.ID)]
 		if ok {

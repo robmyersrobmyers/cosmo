@@ -1125,6 +1125,8 @@ func (h *WebSocketConnectionHandler) parseAndPlan(registration *SubscriptionRegi
 
 	opContext.name = operationKit.parsedOperation.Request.OperationName
 	opContext.opType = operationKit.parsedOperation.Type
+	opContext.rawContent = operationKit.parsedOperation.Request.Query
+	opContext.setPersistence(operationKit.parsedOperation)
 
 	reqCtx := getRequestContext(registration.clientRequest.Context())
 	if reqCtx == nil {

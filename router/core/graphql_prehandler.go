@@ -1067,6 +1067,8 @@ func (s *handlerScope) identifyOperation(operationKit *OperationKit) error {
 		}
 	}
 
+	requestContext.operation.setPersistence(operationKit.parsedOperation)
+
 	if operationKit.parsedOperation.GraphQLRequestExtensions.PersistedQuery.HasHash() {
 		hash := operationKit.parsedOperation.GraphQLRequestExtensions.PersistedQuery.Sha256Hash
 		requestContext.operation.persistedID = hash

@@ -79,8 +79,15 @@ operation := ctx.Operation()
 c.Name() // MyOperation
 c.Type() // Query
 c.OperationHash() // 81671788718
-c.Content() // query MyOperation { ... }
+c.Content() // normalized content: query MyOperation { ... }
+c.RawContent() // the query as the client sent it, or the stored body of a persisted operation
+c.PersistedID() // persisted operation ID, empty if the request supplied none
+c.IsPersisted() // true if the router resolved the operation as a persisted operation
 ```
+
+`IsPersisted` is `true` for operations the router found in the persisted operation store and, when automatic persisted queries (APQ) are enabled, for operations a client registered itself. To check that an operation is approved, look `PersistedID` up in the [persisted operation manifest](#persisted-operation-manifest).
+
+When `persisted_operations.safelist` or `persisted_operations.log_unknown` is enabled, the router also sets `PersistedID` to the computed SHA-256 for requests that send a plain query. Use `IsPersisted` to tell these apart from persisted operations.
 
 ### Access sha256Hash
 
@@ -463,6 +470,53 @@ modules:
   myModule: # Id of your module
     Value: 1
 ```
+
+### Access Router Configuration
+
+The `*core.ModuleContext` passed to `Provision` exposes selected router settings under `ctx.Config`. Plain values are a snapshot taken when the module is provisioned. Function values return the current state. Use it to validate that the router is configured the way your module expects and to fail at startup instead of on the first request.
+
+#### Persisted Operations
+
+`ctx.Config.PersistedOperations.Safelist.Enabled` is a `bool` that mirrors `persisted_operations.safelist.enabled`. When `true`, the router rejects every operation that is not in the persisted operation store.
+
+```go
+func (m *MyModule) Provision(ctx *core.ModuleContext) error {
+	if !ctx.Config.PersistedOperations.Safelist.Enabled {
+		return errors.New("myModule requires persisted_operations.safelist.enabled: true")
+	}
+	return nil
+}
+```
+
+#### Persisted Operation Manifest
+
+`ctx.Config.PersistedOperations.Manifest()` returns the approved persisted operation manifest, a `*core.PersistedOperationManifest`. It returns `nil` when the manifest is not enabled or has not loaded yet. The returned manifest never changes. After a manifest reload, the next call returns the new manifest, so call the function when needed and do not keep the result.
+
+- `Version`, `Revision` and `GeneratedAt` describe the manifest.
+- `Lookup(id)` returns the operation body for a persisted operation ID.
+- `Len()` returns the number of operations.
+- `Range(fn)` calls `fn(id, body)` for each operation until `fn` returns `false`. The order is not defined.
+
+Combine it with the operation context to check that a request runs an approved operation:
+
+```go
+func (m *MyModule) Middleware(ctx core.RequestContext, next http.Handler) {
+	op := ctx.Operation()
+	manifest := m.manifest() // ctx.Config.PersistedOperations.Manifest, saved in Provision
+	if _, approved := manifest.Lookup(op.PersistedID()); !op.IsPersisted() || !approved {
+		// not an approved operation
+	}
+	next.ServeHTTP(ctx.ResponseWriter(), ctx.Request())
+}
+```
+
+#### Client Schema
+
+`ctx.Config.ClientSchema(featureFlag)` returns the client schema of the active graph as a `*core.SchemaSnapshot`. Pass an empty string for the base graph or a feature flag name for a feature flag graph. It returns `nil` for an unknown feature flag, and before the first graph server is running, for example during `Provision`. After a config reload, the next call returns the new schema. Call the function when needed and do not keep the result.
+
+- `SDL()` returns the client schema source. It does not include the engine's built-in definitions, such as introspection fields and built-in scalars.
+- `Digest` is the hex SHA-256 of the SDL.
+- `Revision` is the router config version the schema came from.
 
 ## Migrations
 

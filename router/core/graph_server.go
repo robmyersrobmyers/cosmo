@@ -680,6 +680,9 @@ type graphMux struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 
+	// clientSchema is the client schema this mux serves. A reused mux keeps its own.
+	clientSchema *SchemaSnapshot
+
 	mux       *chi.Mux
 	reused    atomic.Bool
 	finalized atomic.Bool
@@ -1374,6 +1377,8 @@ func (s *graphServer) buildGraphMux(
 	if err != nil {
 		return nil, fmt.Errorf("failed to build plan configuration: %w", err)
 	}
+
+	gm.clientSchema = newSchemaSnapshot(executor.ClientSchemaSDL, opts.RouterConfigVersion)
 
 	if s.engineStats != nil && executor.Resolver != nil {
 		s.engineStats.RegisterResolver(executor.Resolver)

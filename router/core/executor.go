@@ -44,6 +44,8 @@ type Executor struct {
 	// ClientSchema is the GraphQL Schema that is exposed from our API
 	// it is used for the introspection and query normalization/validation.
 	ClientSchema *ast.Document
+	// ClientSchemaSDL is the SDL source that ClientSchema was parsed from.
+	ClientSchemaSDL string
 	// RouterSchema the GraphQL Schema that we use for planning the queries
 	RouterSchema    *ast.Document
 	Resolver        *resolve.Resolver
@@ -147,6 +149,8 @@ func (b *ExecutorConfigurationBuilder) Build(ctx context.Context, opts *Executor
 		// routerSchemaDefinition the GraphQL Schema that we use for planning the queries
 		routerSchemaDefinition ast.Document
 		report                 operationreport.Report
+		// clientSchemaSDL is the source of clientSchemaDefinition.
+		clientSchemaSDL = opts.EngineConfig.GraphqlSchema
 	)
 
 	routerSchemaDefinition, report = astparser.ParseGraphqlDocumentString(opts.EngineConfig.GraphqlSchema)
@@ -175,6 +179,7 @@ func (b *ExecutorConfigurationBuilder) Build(ctx context.Context, opts *Executor
 			return nil, providers, fmt.Errorf("failed to merge graphql client schema with base schema: %w", err)
 		}
 		clientSchemaDefinition = &clientSchema
+		clientSchemaSDL = clientSchemaStr
 	} else {
 		// In the event that a client schema is not generated, the router schema is used in place of the client schema (e.g., for operation validation)
 
@@ -223,6 +228,7 @@ func (b *ExecutorConfigurationBuilder) Build(ctx context.Context, opts *Executor
 	return &Executor{
 		PlanConfig:           *planConfig,
 		ClientSchema:         clientSchemaDefinition,
+		ClientSchemaSDL:      clientSchemaSDL,
 		RouterSchema:         &routerSchemaDefinition,
 		Resolver:             resolver,
 		RenameTypeNames:      renameTypeNames,

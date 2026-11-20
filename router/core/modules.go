@@ -173,6 +173,9 @@ type Cleaner interface {
 type ModuleContext struct {
 	stdContext.Context
 	Module Module
+	// Config exposes selected router settings. Plain values are a snapshot taken when the module
+	// is provisioned. Func fields are live and return the current state.
+	Config ModuleConfig
 	Logger *zap.Logger
 	// PrometheusMeterProvider creates instruments that are served on the router's
 	// Prometheus endpoint, subject to the telemetry.metrics.prometheus settings
